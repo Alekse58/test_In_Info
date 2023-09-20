@@ -1,11 +1,24 @@
-FROM python:3.8.1-alpine
+# Используйте официальный образ Python
+FROM python:3.10
 
-COPY ./requirements.txt ./requirements-dev.txt /app/
-
+# Установите рабочую директорию
 WORKDIR /app
 
-RUN pip install -r requirements.txt -r requirements-dev.txt
+# Копируйте зависимости в контейнер
+COPY requirements.txt .
 
+RUN pip install --upgrade pip
+
+# Установите зависимости
+RUN pip install -r requirements.txt
+RUN pip install opencv-python
+RUN pip install python-multipart
+RUN pip install alembic
+RUN apt-get update
+RUN apt-get install ffmpeg libsm6 libxext6 -y
+# Копируйте исходный код приложения в контейнер
 COPY . .
 
-CMD python
+# Укажите команду для запуска приложения
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+
