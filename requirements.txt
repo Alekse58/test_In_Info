@@ -5,3 +5,12 @@ ultralytics~=8.0.180
 Pillow~=10.0.1
 SQLAlchemy~=2.0.20
 python-multipart~=0.0.6
+opencv-python~=4.8.0.76
+uvicorn~=0.23.2
+fastapi~=0.103.1
+ultralytics~=8.0.180
+Pillow~=10.0.1
+SQLAlchemy~=2.0.20
+python-multipart~=0.0.6
+config~=0.5.1
+pydantic==1.10.7

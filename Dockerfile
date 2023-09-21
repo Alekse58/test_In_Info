@@ -1,4 +1,3 @@
-# Используйте официальный образ Python
 FROM python:3.10
 
 # Установите рабочую директорию
@@ -18,7 +17,7 @@ RUN apt-get update
 RUN apt-get install ffmpeg libsm6 libxext6 -y
 # Копируйте исходный код приложения в контейнер
 COPY . .
-
+CMD [ "./app_entrypoint.sh" ]
 # Укажите команду для запуска приложения
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
 

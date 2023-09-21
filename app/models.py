@@ -1,8 +1,16 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, REAL
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, REAL, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, relationship
 
 
-from database import Base
+class Base(DeclarativeBase):
+    pass
+
+
+class Greeting(Base):
+    __tablename__ = "greetings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(String)
 
 
 class Image(Base):
