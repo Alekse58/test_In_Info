@@ -1,14 +1,21 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+import asyncio
 
-POSTGRES_SERVER = "db"
-POSTGRES_PORT = "5432"
-POSTGRES_USER = "postgres"
-POSTGRES_PASSWORD = "azerty123"
-POSTGRES_DB = "app"
+from sqlalchemy import MetaData, create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-engine = create_engine(
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}"
-)
-print(engine)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+DATABASE_URL = "sqlite+aiosqlite:///db.db"
+
+engine = create_async_engine(DATABASE_URL, echo=True)
+
+async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+Base = declarative_base()
+from models import *
+
+async def init_models():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+
+

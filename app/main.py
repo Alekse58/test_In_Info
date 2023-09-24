@@ -1,111 +1,126 @@
-import datetime
-import os
-from fastapi import FastAPI, UploadFile
+import hashlib
+import imghdr
+from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, HTTPException
 import shutil
 import os
 from ultralytics import YOLO
-import uvicorn
-from fastapi import FastAPI, Depends
-from sqlalchemy.orm import Session
+from fastapi import FastAPI
 
-from app import models, schemas
-from app.db import SessionLocal, engine
-from app.schemas import Greeting
+from db import engine, Base
+from queries import create_item, get_items_by_image_id, get_image_path_by_id, check_image, \
+    create_image
 
 app = FastAPI()
-
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 model = YOLO("yolov8n.pt")
-
 # Путь к исполняемому файлу YOLO
 YOLO_EXECUTABLE = model
 
 
-def run_yolo(input_path, output_path):
-    # Запуск YOLO с помощью subprocess
-    results = model.predict(source=input_path)
-    # Detection
-    for result in results:
-        x1 = result.boxes.xyxy[0].tolist()  # box with xyxy format, (N, 4)
-        # class_id = result.boxes.cls[0].item()  # cls, (N, 1)
-        # print('x1=', x1, 'class=',class_id)
-        return x1,  # class_id
-
-
-
-
-class LazyDbInit:
-    """
-    Create the db schema, just once.
-    """
-    is_initizalized = False
-
-    @classmethod
-    def initialize(cls):
-        if not cls.is_initizalized:
-            models.Base.metadata.create_all(bind=engine)
-            cls.is_initizalized = True
-
-
-server = FastAPI()
-
-
-# Dependency
-def get_db():
-    LazyDbInit.initialize()
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-@server.get("/", response_model=list[schemas.Greeting])
-async def root(db: Session = Depends(get_db)):
-    text = str(datetime.datetime.now())
-    greeting = Greeting(text=text)
-    db_greeting = models.Greeting(**greeting.dict())
-    db.add(db_greeting)
-    db.commit()
-    return db.query(models.Greeting).all()
-
-
-@server.post("/detect-bounding-box")
-async def detect_bounding_box(file: UploadFile):
-    # Сохранение загруженного изображения
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    print(file_path)
-    # Запуск YOLO для обнаружения объектов
-    output_path = os.path.join(UPLOAD_DIR, "output.jpg")
-    box = run_yolo(file_path, output_path)
-
-    results = [{"coordinates": [box]}]
-    return results
-
-
-@server.post("/detect-with-bounding-box-image")
-async def detect_with_bounding_box_image(file: UploadFile):
-    # Сохранение загруженного изображения
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    # Запуск YOLO для обнаружения объектов
-    output_path = os.path.join(UPLOAD_DIR, "output.jpg")
-    run_yolo(file_path, output_path)
-
-    # Отправка изображения с разметкой bounding box
-    with open(output_path, "rb") as f:
+def calculate_image_hash(image_path):
+    # Открываем изображение в бинарном режиме и считываем его содержимое
+    with open(image_path, 'rb') as f:
         image_data = f.read()
 
-    return {"image": image_data}
+    # Вычисляем SHA-256 хеш изображения
+    sha256_hash = hashlib.sha256(image_data).hexdigest()
+    return sha256_hash
+
+
+def run_yolo(input_path):
+    results = model.predict(source=input_path, save=True, project=UPLOAD_DIR)
+    detected_objects = []
+    boxes = results[0].boxes
+    print(results)
+    for box in boxes:
+        coordinates = box.xyxy[0].tolist()
+        detected_objects.append(coordinates)
+
+    # TODO найти адекватный метод сохранения
+    processed_image_path = f"{results[0].save_dir}/{os.path.basename(input_path)}"
+    print("yyyyyyyyyyyyyyyyyyyy", processed_image_path)
+    return detected_objects, processed_image_path
+
+
+def is_valid_image_format(file: UploadFile):
+    allowed_formats = {"jpeg", "jpg", "png", "bmp", "dng", "mpo", "tif", "tiff", "webp", "pfm"}
+    file_format = imghdr.what(file.file)
+    return file_format in allowed_formats
+
+
+async def photo_processing(file_path, hash):
+    items = []
+    box, path = run_yolo(file_path)
+    id_photo, created = await create_image(image_path=file_path, hashed=hash, path=path)
+    for result in box:
+        coordinates = result
+        if coordinates:
+            x1, y1, x2, y2 = coordinates
+            items.append(coordinates)
+            item = await create_item(x1=x1, y1=y1, x2=x2, y2=y2, photo_id=id_photo)
+    return id_photo, items
+
+
+def save_uploaded_image(file: UploadFile, upload_dir: str):
+    file_path = os.path.join(upload_dir, file.filename)
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return file_path
+
+
+app = FastAPI()
+
+
+@app.on_event("startup")
+async def init_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+
+
+@app.post("/detect-bounding-box")
+async def detect_bounding_box(file: UploadFile):
+    if not is_valid_image_format(file):
+        raise HTTPException(status_code=400, detail="Invalid image format")
+
+    # Сохранение загруженного изображения
+    file_path = save_uploaded_image(file, UPLOAD_DIR)
+    # Хеширование фото
+    hash = calculate_image_hash(file_path)
+    # Получение или создание фотографии по хешу
+    id_photo, created = await check_image(image_path=file_path, hashed=hash)
+    # Запуск YOLO для обнаружения объектов
+    if created:
+        id_photo, items = await photo_processing(file_path, hash)
+        return {"image_id": id_photo, "items": items}
+    else:
+        items = await get_items_by_image_id(id_photo)
+        return {"image_id": id_photo, "items": items}
+
+
+@app.post("/detect-with-bounding-box-image")
+async def detect_with_bounding_box_image(file: UploadFile):
+    if not is_valid_image_format(file):
+        raise HTTPException(status_code=400, detail="Invalid image format")
+
+    # Сохранение загруженного изображения
+    file_path = save_uploaded_image(file, UPLOAD_DIR)
+    # Хеширование фото
+    hash = calculate_image_hash(file_path)
+    image, created = await check_image(image_path=file_path, hashed=hash)
+    # Запуск YOLO для обнаружения объектов
+    items = []
+    if created:
+        id, items = await photo_processing(file_path, hash)
+        image_path = await get_image_path_by_id(id)
+        return FileResponse(image_path)
+    else:
+        image_path = await get_image_path_by_id(image)
+        return FileResponse(image_path)
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    print("dsaadsdsa")
-    uvicorn.run(server, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.1", port=8000)
